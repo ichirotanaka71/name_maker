@@ -2,7 +2,7 @@
 <html lang="ja">
 <head>
     <meta charset="UTF-8">
-    <title>漫画ネーム制作ツール 極・空行区切り版</title>
+    <title>漫画ネーム制作ツール 極・フォント対応版</title>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/fabric.js/5.3.1/fabric.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
@@ -10,7 +10,8 @@
         body { font-family: sans-serif; margin: 0; background: #222; color: #eee; display: flex; height: 100vh; overflow: hidden; }
         .sidebar { width: 320px; background: #1a1a1a; padding: 20px; display: flex; flex-direction: column; gap: 12px; border-right: 1px solid #444; overflow-y: auto; z-index: 10; }
         textarea { width: 100%; height: 100px; background: #333; color: white; border: 1px solid #555; padding: 10px; box-sizing: border-box; border-radius: 4px; font-size: 14px; }
-        button { cursor: pointer; padding: 10px; background: #4a90e2; color: white; border: none; border-radius: 4px; font-weight: bold; transition: 0.2s; }
+        select, button { cursor: pointer; padding: 10px; background: #4a90e2; color: white; border: none; border-radius: 4px; font-weight: bold; transition: 0.2s; }
+        select { background: #333; border: 1px solid #555; font-size: 12px; }
         button:hover { background: #357abd; }
         .layer-ctrl { background: #333; padding: 12px; border-radius: 8px; border: 1px solid #444; }
         .layer-title { font-size: 11px; margin-bottom: 8px; color: #aaa; display: block; }
@@ -33,7 +34,7 @@
 
 <div class="sidebar">
     <div class="layer-ctrl">
-        <span class="layer-title">編集モード（セリフは常に最前面）</span>
+        <span class="layer-title">編集モード</span>
         <div class="mode-buttons">
             <button class="mode-btn active" id="btn-all" onclick="setEditMode('all')">すべて</button>
             <button class="mode-btn" id="btn-frame" onclick="setEditMode('frame')">コマ</button>
@@ -42,8 +43,18 @@
         </div>
     </div>
     
-    <label>1. セリフ投入 (空行で区切り)</label>
-    <textarea id="csvInput" placeholder="セリフ1&#13;&#10;&#13;&#10;改行入りの&#13;&#10;セリフ2"></textarea>
+    <label>1. セリフ投入 (空行区切り)</label>
+    <textarea id="csvInput" placeholder="セリフを入力..."></textarea>
+    
+    <label style="font-size: 11px; color:#aaa;">フォント選択</label>
+    <select id="fontSelect">
+        <option value="'MS Gothic', sans-serif">ＭＳ ゴシック</option>
+        <option value="'MS Mincho', serif">ＭＳ 明朝</option>
+        <option value="'Meiryo', sans-serif">メイリオ</option>
+        <option value="'Yu Gothic', sans-serif">游ゴシック</option>
+        <option value="'GenEi Antique Pv5', serif">源暎アンチック</option>
+    </select>
+    
     <button onclick="importSerifu()">リスト更新</button>
     <div class="parts-box" id="partsBox"></div>
 
@@ -60,12 +71,6 @@
     <button onclick="document.getElementById('fileInput').click()" style="background: #8e44ad; width:100%; margin-bottom:5px;">プロジェクト読込</button>
     <input type="file" id="fileInput" accept=".json" onchange="loadProject(event)">
     <button onclick="exportPDF()" style="background: #c0392b; width:100%;">PDF書き出し</button>
-
-    <div style="font-size: 11px; color: #666; line-height: 1.4;">
-        Ctrl+Z/Y: Undo/Redo<br>
-        Ctrl+C/V: コピペ<br>
-        Ctrl+ホイール: ズーム
-    </div>
 </div>
 
 <div class="main-view" id="scrollArea"></div>
@@ -80,7 +85,6 @@
     const history = {};
     let isHistoryLocked = false;
 
-    // キャンバス初期化
     const scrollArea = document.getElementById('scrollArea');
     for (let i = 1; i <= totalPages; i += 2) {
         const container = document.createElement('div');
@@ -116,9 +120,10 @@
         canvases[i] = c;
     }
 
-    // --- セリフインポート（空行区切り） ---
+    // --- インポート・生成 ---
     function importSerifu() {
         const input = document.getElementById('csvInput').value;
+        const font = document.getElementById('fontSelect').value;
         const blocks = input.split(/\n\s*\n/).filter(b => b.trim() !== "");
         const box = document.getElementById('partsBox');
         box.innerHTML = "";
@@ -129,9 +134,14 @@
             div.className = 'serifu-item';
             div.innerText = cleanText;
             div.onclick = () => {
-                fabric.Image.fromURL(createSerifuData(cleanText), img => {
+                fabric.Image.fromURL(createSerifuData(cleanText, font), img => {
                     const pos = getOffsetCoord();
-                    img.set({left: pos.left, top: pos.top, customType: 'serifu'});
+                    img.set({
+                        left: pos.left, 
+                        top: pos.top, 
+                        customType: 'serifu',
+                        lockUniScaling: true // ★縦横比を固定
+                    });
                     canvases[activePageIdx].add(img).setActiveObject(img);
                 });
             };
@@ -139,17 +149,15 @@
         });
     }
 
-    // --- 縦書き生成（改行維持） ---
-    function createSerifuData(text) {
+    function createSerifuData(text, font) {
         const tempCanvas = document.createElement('canvas');
         const tCtx = tempCanvas.getContext('2d');
         const fSize = 28;
         const lines = text.split('\n');
-        
         tempCanvas.width = lines.length * (fSize * 1.3) + 40;
         tempCanvas.height = Math.max(...lines.map(l => l.length)) * fSize + 40;
         
-        tCtx.font = `bold ${fSize}px "MS Gothic", sans-serif`;
+        tCtx.font = `bold ${fSize}px ${font}`;
         tCtx.textBaseline = 'top';
         tCtx.textAlign = 'center';
         tCtx.fillStyle = "black";
@@ -170,11 +178,24 @@
         return tempCanvas.toDataURL();
     }
 
-    // --- 基本機能・保存・読込 ---
-    function sortLayers(canvas) {
-        canvas.getObjects().forEach(obj => { if (obj.customType === 'serifu') canvas.bringToFront(obj); });
+    // --- パーツ追加 ---
+    function addFrame() {
+        const pos = getOffsetCoord();
+        const rect = new fabric.Rect({ left: pos.left, top: pos.top, width: 300, height: 200, fill: 'transparent', stroke: 'black', strokeWidth: 3, customType: 'frame' });
+        canvases[activePageIdx].add(rect).setActiveObject(rect);
     }
 
+    function addCharacter() {
+        const pos = getOffsetCoord();
+        // ★塗り(fill)を白(#fff)に設定
+        const head = new fabric.Circle({ radius: 25, fill: '#fff', stroke: 'black', strokeWidth: 2, left: 10 });
+        const body = new fabric.Triangle({ width: 60, height: 70, fill: '#fff', stroke: 'black', strokeWidth: 2, left: 5, top: 45 });
+        const char = new fabric.Group([body, head], { left: pos.left, top: pos.top, customType: 'char' });
+        canvases[activePageIdx].add(char).setActiveObject(char);
+    }
+
+    // --- 既存ロジック ---
+    function sortLayers(canvas) { canvas.getObjects().forEach(obj => { if (obj.customType === 'serifu') canvas.bringToFront(obj); }); }
     function setEditMode(mode) {
         currentEditMode = mode;
         document.querySelectorAll('.mode-btn').forEach(b => b.classList.remove('active'));
@@ -188,110 +209,24 @@
             c.discardActiveObject(); c.requestRenderAll();
         });
     }
-
-    function setActivePage(idx) {
-        if (activePageIdx !== idx) offsetCounter = 0;
-        activePageIdx = idx;
-        document.querySelectorAll('.canvas-box').forEach(el => el.classList.remove('active'));
-        document.getElementById(`wrapper-${idx}`).classList.add('active');
-    }
-
-    function addFrame() {
-        const pos = getOffsetCoord();
-        const rect = new fabric.Rect({ left: pos.left, top: pos.top, width: 300, height: 200, fill: 'transparent', stroke: 'black', strokeWidth: 3, customType: 'frame' });
-        canvases[activePageIdx].add(rect).setActiveObject(rect);
-    }
-
-    function addCharacter() {
-        const pos = getOffsetCoord();
-        const head = new fabric.Circle({ radius: 25, fill: '#fff', stroke: 'black', strokeWidth: 2, left: 10 });
-        const body = new fabric.Triangle({ width: 60, height: 70, fill: '#fff', stroke: 'black', strokeWidth: 2, left: 5, top: 45 });
-        const char = new fabric.Group([body, head], { left: pos.left, top: pos.top, customType: 'char' });
-        canvases[activePageIdx].add(char).setActiveObject(char);
-    }
-
-    function downloadProject() {
-        const projectData = { pages: canvases.map(c => c ? c.toJSON(['customType']) : null) };
-        const blob = new Blob([JSON.stringify(projectData)], { type: "application/json" });
-        const a = document.createElement('a');
-        a.href = URL.createObjectURL(blob);
-        a.download = `name_project_${Date.now()}.json`;
-        a.click();
-    }
-
-    function loadProject(event) {
-        const reader = new FileReader();
-        reader.onload = (e) => {
-            const data = JSON.parse(e.target.result);
-            isHistoryLocked = true;
-            data.pages.forEach((json, idx) => {
-                if (json && canvases[idx]) canvases[idx].loadFromJSON(json, () => {
-                    sortLayers(canvases[idx]); canvases[idx].renderAll();
-                    if(idx === totalPages) { isHistoryLocked = false; setEditMode(currentEditMode); }
-                });
-            });
-        };
-        reader.readAsText(event.target.files[0]);
-    }
-
-    function saveHistory(idx) {
-        if (isHistoryLocked) return;
-        const state = JSON.stringify(canvases[idx].toJSON(['customType']));
-        if (history[idx].undos.slice(-1)[0] === state) return;
-        history[idx].undos.push(state);
-        history[idx].redos = [];
-    }
-
-    function undo() {
-        const h = history[activePageIdx]; if (h.undos.length <= 1) return;
-        isHistoryLocked = true; h.redos.push(h.undos.pop());
-        canvases[activePageIdx].loadFromJSON(h.undos[h.undos.length-1], () => { canvases[activePageIdx].renderAll(); isHistoryLocked = false; setEditMode(currentEditMode); });
-    }
-
-    function redo() {
-        const h = history[activePageIdx]; if (h.redos.length === 0) return;
-        isHistoryLocked = true;
-        const state = h.redos.pop(); h.undos.push(state);
-        canvases[activePageIdx].loadFromJSON(state, () => { canvases[activePageIdx].renderAll(); isHistoryLocked = false; setEditMode(currentEditMode); });
-    }
-
-    function getOffsetCoord() {
-        const pos = { left: 40 + (offsetCounter * 25), top: 40 + (offsetCounter * 25) };
-        offsetCounter = (offsetCounter + 1) % 6; return pos;
-    }
-
+    function setActivePage(idx) { if (activePageIdx !== idx) offsetCounter = 0; activePageIdx = idx; document.querySelectorAll('.canvas-box').forEach(el => el.classList.remove('active')); document.getElementById(`wrapper-${idx}`).classList.add('active'); }
+    function downloadProject() { const projectData = { pages: canvases.map(c => c ? c.toJSON(['customType', 'lockUniScaling']) : null) }; const blob = new Blob([JSON.stringify(projectData)], { type: "application/json" }); const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = `name_project_${Date.now()}.json`; a.click(); }
+    function loadProject(event) { const reader = new FileReader(); reader.onload = (e) => { const data = JSON.parse(e.target.result); isHistoryLocked = true; data.pages.forEach((json, idx) => { if (json && canvases[idx]) canvases[idx].loadFromJSON(json, () => { sortLayers(canvases[idx]); canvases[idx].renderAll(); if(idx === totalPages) { isHistoryLocked = false; setEditMode(currentEditMode); } }); }); }; reader.readAsText(event.target.files[0]); }
+    function saveHistory(idx) { if (isHistoryLocked) return; const state = JSON.stringify(canvases[idx].toJSON(['customType', 'lockUniScaling'])); if (history[idx].undos.slice(-1)[0] === state) return; history[idx].undos.push(state); history[idx].redos = []; }
+    function undo() { const h = history[activePageIdx]; if (h.undos.length <= 1) return; isHistoryLocked = true; h.redos.push(h.undos.pop()); canvases[activePageIdx].loadFromJSON(h.undos[h.undos.length-1], () => { canvases[activePageIdx].renderAll(); isHistoryLocked = false; setEditMode(currentEditMode); }); }
+    function redo() { const h = history[activePageIdx]; if (h.redos.length === 0) return; isHistoryLocked = true; const state = h.redos.pop(); h.undos.push(state); canvases[activePageIdx].loadFromJSON(state, () => { canvases[activePageIdx].renderAll(); isHistoryLocked = false; setEditMode(currentEditMode); }); }
+    function getOffsetCoord() { const pos = { left: 40 + (offsetCounter * 25), top: 40 + (offsetCounter * 25) }; offsetCounter = (offsetCounter + 1) % 6; return pos; }
     window.addEventListener('keydown', (e) => {
         if (document.activeElement.tagName === 'TEXTAREA') return;
         if (e.ctrlKey || e.metaKey) {
             if (e.key === 'z') { e.preventDefault(); undo(); }
             if (e.key === 'y') { e.preventDefault(); redo(); }
-            if (e.key === 'c') { const t = canvases[activePageIdx].getActiveObject(); if(t) t.clone(cl => { cl.customType = t.customType; clipboard = cl; }, ['customType']); }
-            if (e.key === 'v') {
-                if(!clipboard) return;
-                const pos = getOffsetCoord();
-                clipboard.clone(cl => {
-                    canvases[activePageIdx].discardActiveObject();
-                    cl.set({left:pos.left, top:pos.top, evented:true, customType: clipboard.customType});
-                    canvases[activePageIdx].add(cl).setActiveObject(cl);
-                }, ['customType']);
-            }
+            if (e.key === 'c') { const t = canvases[activePageIdx].getActiveObject(); if(t) t.clone(cl => { cl.customType = t.customType; cl.lockUniScaling = t.lockUniScaling; clipboard = cl; }, ['customType', 'lockUniScaling']); }
+            if (e.key === 'v') { if(!clipboard) return; const pos = getOffsetCoord(); clipboard.clone(cl => { canvases[activePageIdx].discardActiveObject(); cl.set({left:pos.left, top:pos.top, evented:true, customType: clipboard.customType, lockUniScaling: clipboard.lockUniScaling}); canvases[activePageIdx].add(cl).setActiveObject(cl); }, ['customType', 'lockUniScaling']); }
         }
-        if (e.key === 'Delete' || e.key === 'Backspace') {
-            const acts = canvases[activePageIdx].getActiveObjects();
-            canvases[activePageIdx].remove(...acts).discardActiveObject().renderAll();
-        }
+        if (e.key === 'Delete' || e.key === 'Backspace') { const acts = canvases[activePageIdx].getActiveObjects(); canvases[activePageIdx].remove(...acts).discardActiveObject().renderAll(); }
     });
-
-    async function exportPDF() {
-        const { jsPDF } = window.jspdf;
-        const pdf = new jsPDF('p', 'mm', 'a4');
-        for (let i = 1; i <= totalPages; i++) {
-            if (i > 1) pdf.addPage();
-            pdf.addImage(canvases[i].toDataURL({ format: 'png' }), 'PNG', 0, 0, 210, 297);
-        }
-        pdf.save("comic_name.pdf");
-    }
-
+    async function exportPDF() { const { jsPDF } = window.jspdf; const pdf = new jsPDF('p', 'mm', 'a4'); for (let i = 1; i <= totalPages; i++) { if (i > 1) pdf.addPage(); pdf.addImage(canvases[i].toDataURL({ format: 'png' }), 'PNG', 0, 0, 210, 297); } pdf.save("comic_name.pdf"); }
     window.onload = () => { setActivePage(1); for(let i=1; i<=totalPages; i++) saveHistory(i); importSerifu(); };
 </script>
 </body>
