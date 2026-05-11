@@ -2,7 +2,7 @@
 <html lang="ja">
 <head>
     <meta charset="UTF-8">
-    <title>漫画ネーム制作ツール 極・完全版</title>
+    <title>漫画ネーム制作ツール 極・ズーム対応</title>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/fabric.js/5.3.1/fabric.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
@@ -13,16 +13,16 @@
         button { cursor: pointer; padding: 10px; background: #4a90e2; color: white; border: none; border-radius: 4px; font-weight: bold; transition: 0.2s; }
         button:hover { background: #357abd; }
         .page-info { background: #333; padding: 10px; border-radius: 4px; text-align: center; font-weight: bold; border: 1px solid #444; color: #4a90e2; }
-        .main-view { flex: 1; display: flex; flex-direction: column; align-items: center; overflow-y: auto; padding: 60px 0; scroll-snap-type: y mandatory; }
+        
+        /* メインビューとズームのコンテナ */
+        .main-view { flex: 1; display: flex; flex-direction: column; align-items: center; overflow: auto; padding: 60px 0; scroll-snap-type: y mandatory; }
         .spread-container { display: flex; flex-direction: row-reverse; gap: 20px; padding: 60px; scroll-snap-align: center; }
         
-        /* ページ枠の基本スタイル */
-        .canvas-box { background: white; box-shadow: 0 10px 40px rgba(0,0,0,0.6); position: relative; border: 2px solid transparent; transition: 0.2s; }
+        .canvas-box { background: white; box-shadow: 0 10px 40px rgba(0,0,0,0.6); position: relative; border: 2px solid transparent; transition: 0.2s; transform-origin: top center; }
         .page-label { position: absolute; top: -30px; width: 100%; text-align: center; color: #aaa; font-weight: bold; transition: 0.2s; }
 
-        /* アクティブな時のスタイル */
         .canvas-box.active { border: 2px solid #4a90e2; }
-        .canvas-box.active .page-label { color: #4a90e2; font-size: 1.2em; } /* 番号も青く強調 */
+        .canvas-box.active .page-label { color: #4a90e2; font-size: 1.2em; }
 
         .parts-box { background: #2a2a2a; padding: 10px; border-radius: 4px; max-height: 200px; overflow-y: auto; border: 1px inset #111; }
         .serifu-item { background: #f0f0f0; color: #000; padding: 8px; margin-bottom: 5px; cursor: pointer; font-size: 13px; border-radius: 3px; font-weight: bold; }
@@ -32,7 +32,7 @@
 <body>
 
 <div class="sidebar">
-    <div class="page-info">ネーム制作ツール 極</div>
+    <div class="page-info">ネーム制作ツール 極 (Zoom対応)</div>
     
     <label>1. セリフ</label>
     <textarea id="csvInput" placeholder="セリフをコピペ..."></textarea>
@@ -53,14 +53,13 @@
         <button onclick="loadAll()" style="background: #8e44ad;">読込</button>
     </div>
     <button onclick="exportPDF()" style="background: #c0392b;">PDF書き出し</button>
-    <button onclick="exportImages()" style="background: #d35400;">連番PNG(ZIP)書き出し</button>
 
     <div style="font-size: 11px; color: #aaa; line-height: 1.6; margin-top: 10px;">
         【操作】<br>
-        青枠のページに配置されます。<br>
-        Ctrl+Z: 戻る / Ctrl+Y: 進む<br>
-        Ctrl+C/V/X: コピペ<br>
-        Del: 消去
+        ・<b>Ctrl + ホイール</b>: ズーム<br>
+        ・<b>Ctrl + 0</b>: ズームリセット<br>
+        ・Ctrl+Z/Y: Undo/Redo<br>
+        ・Ctrl+C/V/X: コピペ<br>
     </div>
 </div>
 
@@ -74,6 +73,7 @@
     let offsetCounter = 0;
     const history = {};
     let isHistoryLocked = false;
+    let currentZoom = 1;
 
     const scrollArea = document.getElementById('scrollArea');
     for (let i = 1; i <= totalPages; i += 2) {
@@ -98,43 +98,59 @@
         c.on('object:modified', () => saveHistory(i));
         c.on('object:removed', () => saveHistory(i));
         c.on('mouse:down', () => setActivePage(i));
+
+        // ズームイベント
+        c.on('mouse:wheel', function(opt) {
+            if (opt.e.ctrlKey) {
+                const delta = opt.e.deltaY;
+                let zoom = c.getZoom();
+                zoom *= 0.999 ** delta;
+                if (zoom > 5) zoom = 5;
+                if (zoom < 0.2) zoom = 0.2;
+                c.zoomToPoint({ x: opt.e.offsetX, y: opt.e.offsetY }, zoom);
+                opt.e.preventDefault();
+                opt.e.stopPropagation();
+                // 他の全ページにも同期させる（見開きでズームを合わせるため）
+                syncZoom(zoom, { x: opt.e.offsetX, y: opt.e.offsetY });
+            }
+        });
+
         canvases[i] = c;
+    }
+
+    function syncZoom(zoom, point) {
+        currentZoom = zoom;
+        canvases.forEach(c => {
+            if (c) {
+                c.setZoom(zoom);
+                c.renderAll();
+            }
+        });
     }
 
     function setActivePage(idx) {
         if (activePageIdx !== idx) offsetCounter = 0;
         activePageIdx = idx;
-        // すべての枠とラベルからアクティブ状態を外す
         document.querySelectorAll('.canvas-box').forEach(el => el.classList.remove('active'));
-        // 対象の枠をアクティブにする（CSSでラベルも連動）
         document.getElementById(`wrapper-${idx}`).classList.add('active');
     }
 
-    // --- 出力機能 ---
+    // PDF書き出し（ズームを一旦解除して出力）
     async function exportPDF() {
         const { jsPDF } = window.jspdf;
         const pdf = new jsPDF('p', 'mm', 'a4');
         const pageWidth = pdf.internal.pageSize.getWidth();
         const pageHeight = pdf.internal.pageSize.getHeight();
+        
+        canvases.forEach(c => { if(c) c.setZoom(1); }); // 出力時は等倍に
+
         for (let i = 1; i <= totalPages; i++) {
             if (i > 1) pdf.addPage();
-            pdf.addImage(canvases[i].toDataURL({ format: 'png', quality: 1 }), 'PNG', 0, 0, pageWidth, pageHeight);
+            pdf.addImage(canvases[i].toDataURL({ format: 'png' }), 'PNG', 0, 0, pageWidth, pageHeight);
         }
         pdf.save("comic_name.pdf");
-    }
-
-    async function exportImages() {
-        const zip = new JSZip();
-        const folder = zip.folder("images");
-        for (let i = 1; i <= totalPages; i++) {
-            const dataUrl = canvases[i].toDataURL({ format: 'png' }).split(',')[1];
-            folder.file(`page_${String(i).padStart(2, '0')}.png`, dataUrl, {base64: true});
-        }
-        const content = await zip.generateAsync({type:"blob"});
-        const link = document.createElement('a');
-        link.href = URL.createObjectURL(content);
-        link.download = "comic_pages.zip";
-        link.click();
+        
+        canvases.forEach(c => { if(c) c.setZoom(currentZoom); }); // ズームを戻す
     }
 
     // --- 履歴・基本機能 ---
@@ -170,6 +186,7 @@
         if (e.ctrlKey || e.metaKey) {
             if (e.key === 'z') { e.preventDefault(); undo(); }
             if (e.key === 'y') { e.preventDefault(); redo(); }
+            if (e.key === '0') { e.preventDefault(); syncZoom(1); } // ズームリセット
             if (e.key === 'c') {
                 const t = canvases[activePageIdx].getActiveObject();
                 if(t) t.clone(cloned => clipboard = cloned);
@@ -239,18 +256,18 @@
     }
 
     function saveAll() {
-        localStorage.setItem('comic_v_final_v2', JSON.stringify(canvases.map(c => c ? c.toJSON() : null)));
+        localStorage.setItem('comic_v_final_zoom', JSON.stringify(canvases.map(c => c ? c.toJSON() : null)));
         alert("保存完了");
     }
 
     function loadAll() {
-        const data = localStorage.getItem('comic_v_final_v2');
+        const data = localStorage.getItem('comic_v_final_zoom');
         if (!data) return;
         JSON.parse(data).forEach((json, idx) => { if (json && canvases[idx]) canvases[idx].loadFromJSON(json, () => canvases[idx].renderAll()); });
     }
 
     window.onload = () => { 
-        setActivePage(1); // 初期状態で1ページ目を強調
+        setActivePage(1);
         for(let i=1; i<=totalPages; i++) saveHistory(i); 
     };
 </script>
