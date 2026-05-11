@@ -2,29 +2,34 @@
 <html lang="ja">
 <head>
     <meta charset="UTF-8">
-    <title>漫画ネーム制作ツール 極・ズーム対応</title>
+    <title>漫画ネーム制作ツール 極・レイヤー対応</title>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/fabric.js/5.3.1/fabric.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
     <style>
         body { font-family: sans-serif; margin: 0; background: #222; color: #eee; display: flex; height: 100vh; overflow: hidden; }
+        
+        /* 操作パネル */
         .sidebar { width: 320px; background: #1a1a1a; padding: 20px; display: flex; flex-direction: column; gap: 15px; border-right: 1px solid #444; overflow-y: auto; z-index: 10; }
-        textarea { width: 100%; height: 100px; background: #333; color: white; border: 1px solid #555; padding: 10px; box-sizing: border-box; border-radius: 4px; font-size: 14px; }
+        textarea { width: 100%; height: 80px; background: #333; color: white; border: 1px solid #555; padding: 10px; box-sizing: border-box; border-radius: 4px; font-size: 14px; }
         button { cursor: pointer; padding: 10px; background: #4a90e2; color: white; border: none; border-radius: 4px; font-weight: bold; transition: 0.2s; }
         button:hover { background: #357abd; }
-        .page-info { background: #333; padding: 10px; border-radius: 4px; text-align: center; font-weight: bold; border: 1px solid #444; color: #4a90e2; }
         
-        /* メインビューとズームのコンテナ */
+        /* レイヤーセレクト */
+        .layer-ctrl { background: #333; padding: 15px; border-radius: 8px; border: 1px solid #444; margin-bottom: 5px; }
+        .layer-title { font-size: 12px; margin-bottom: 8px; color: #aaa; display: block; }
+        .mode-buttons { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 5px; }
+        .mode-btn { background: #444; color: #888; font-size: 11px; padding: 8px 2px; }
+        .mode-btn.active { background: #4a90e2; color: white; box-shadow: 0 0 10px rgba(74,144,226,0.5); }
+
         .main-view { flex: 1; display: flex; flex-direction: column; align-items: center; overflow: auto; padding: 60px 0; scroll-snap-type: y mandatory; }
         .spread-container { display: flex; flex-direction: row-reverse; gap: 20px; padding: 60px; scroll-snap-align: center; }
-        
-        .canvas-box { background: white; box-shadow: 0 10px 40px rgba(0,0,0,0.6); position: relative; border: 2px solid transparent; transition: 0.2s; transform-origin: top center; }
-        .page-label { position: absolute; top: -30px; width: 100%; text-align: center; color: #aaa; font-weight: bold; transition: 0.2s; }
-
+        .canvas-box { background: white; box-shadow: 0 10px 40px rgba(0,0,0,0.6); position: relative; border: 2px solid transparent; transition: 0.2s; }
         .canvas-box.active { border: 2px solid #4a90e2; }
-        .canvas-box.active .page-label { color: #4a90e2; font-size: 1.2em; }
+        .page-label { position: absolute; top: -30px; width: 100%; text-align: center; color: #aaa; font-weight: bold; }
+        .canvas-box.active .page-label { color: #4a90e2; }
 
-        .parts-box { background: #2a2a2a; padding: 10px; border-radius: 4px; max-height: 200px; overflow-y: auto; border: 1px inset #111; }
+        .parts-box { background: #2a2a2a; padding: 10px; border-radius: 4px; max-height: 150px; overflow-y: auto; border: 1px inset #111; }
         .serifu-item { background: #f0f0f0; color: #000; padding: 8px; margin-bottom: 5px; cursor: pointer; font-size: 13px; border-radius: 3px; font-weight: bold; }
         .btn-group { display: grid; grid-template-columns: 1fr 1fr; gap: 5px; }
     </style>
@@ -32,10 +37,18 @@
 <body>
 
 <div class="sidebar">
-    <div class="page-info">ネーム制作ツール 極 (Zoom対応)</div>
+    <div class="layer-ctrl">
+        <span class="layer-title">編集モード（他はロックされます）</span>
+        <div class="mode-buttons">
+            <button class="mode-btn active" id="btn-all" onclick="setEditMode('all')">すべて</button>
+            <button class="mode-btn" id="btn-frame" onclick="setEditMode('frame')">コマ</button>
+            <button class="mode-btn" id="btn-serifu" onclick="setEditMode('serifu')">セリフ</button>
+            <button class="mode-btn" id="btn-char" onclick="setEditMode('char')">キャラ</button>
+        </div>
+    </div>
     
     <label>1. セリフ</label>
-    <textarea id="csvInput" placeholder="セリフをコピペ..."></textarea>
+    <textarea id="csvInput" placeholder="セリフを入力..."></textarea>
     <button onclick="importSerifu()">リスト更新</button>
     <div class="parts-box" id="partsBox"></div>
 
@@ -47,19 +60,14 @@
     
     <hr style="width:100%; border:0; border-top:1px solid #444;">
     
-    <label>3. 保存・出力</label>
-    <div class="btn-group">
-        <button onclick="saveAll()" style="background: #27ae60;">一時保存</button>
-        <button onclick="loadAll()" style="background: #8e44ad;">読込</button>
-    </div>
+    <button onclick="saveAll()" style="background: #27ae60;">一時保存</button>
+    <button onclick="loadAll()" style="background: #8e44ad;">読込</button>
     <button onclick="exportPDF()" style="background: #c0392b;">PDF書き出し</button>
 
-    <div style="font-size: 11px; color: #aaa; line-height: 1.6; margin-top: 10px;">
-        【操作】<br>
-        ・<b>Ctrl + ホイール</b>: ズーム<br>
-        ・<b>Ctrl + 0</b>: ズームリセット<br>
-        ・Ctrl+Z/Y: Undo/Redo<br>
-        ・Ctrl+C/V/X: コピペ<br>
+    <div style="font-size: 11px; color: #aaa; line-height: 1.4; margin-top: 5px;">
+        Ctrl+Z/Y: Undo/Redo<br>
+        Ctrl+C/V/X: コピペ<br>
+        Ctrl+ホイール: ズーム
     </div>
 </div>
 
@@ -71,10 +79,11 @@
     let activePageIdx = 1;
     let clipboard = null;
     let offsetCounter = 0;
+    let currentEditMode = 'all'; // 'all', 'frame', 'serifu', 'char'
     const history = {};
     let isHistoryLocked = false;
-    let currentZoom = 1;
 
+    // キャンバス初期化
     const scrollArea = document.getElementById('scrollArea');
     for (let i = 1; i <= totalPages; i += 2) {
         const container = document.createElement('div');
@@ -99,32 +108,41 @@
         c.on('object:removed', () => saveHistory(i));
         c.on('mouse:down', () => setActivePage(i));
 
-        // ズームイベント
+        // ズーム（同期）
         c.on('mouse:wheel', function(opt) {
             if (opt.e.ctrlKey) {
                 const delta = opt.e.deltaY;
-                let zoom = c.getZoom();
-                zoom *= 0.999 ** delta;
-                if (zoom > 5) zoom = 5;
-                if (zoom < 0.2) zoom = 0.2;
-                c.zoomToPoint({ x: opt.e.offsetX, y: opt.e.offsetY }, zoom);
-                opt.e.preventDefault();
-                opt.e.stopPropagation();
-                // 他の全ページにも同期させる（見開きでズームを合わせるため）
-                syncZoom(zoom, { x: opt.e.offsetX, y: opt.e.offsetY });
+                let zoom = c.getZoom() * (0.999 ** delta);
+                zoom = Math.min(Math.max(zoom, 0.2), 5);
+                canvases.forEach(can => { if(can){ can.setZoom(zoom); can.renderAll(); }});
+                opt.e.preventDefault(); opt.e.stopPropagation();
             }
         });
-
         canvases[i] = c;
     }
 
-    function syncZoom(zoom, point) {
-        currentZoom = zoom;
+    // --- レイヤーモード制御 ---
+    function setEditMode(mode) {
+        currentEditMode = mode;
+        // ボタン外観更新
+        document.querySelectorAll('.mode-btn').forEach(b => b.classList.remove('active'));
+        document.getElementById(`btn-${mode}`).classList.add('active');
+
+        // 全キャンバスの全オブジェクトに対してロック設定
         canvases.forEach(c => {
-            if (c) {
-                c.setZoom(zoom);
-                c.renderAll();
-            }
+            if(!c) return;
+            c.getObjects().forEach(obj => {
+                let selectable = true;
+                if (mode !== 'all') {
+                    if (mode === 'frame' && obj.customType !== 'frame') selectable = false;
+                    if (mode === 'serifu' && obj.customType !== 'serifu') selectable = false;
+                    if (mode === 'char' && obj.customType !== 'char') selectable = false;
+                }
+                obj.selectable = selectable;
+                obj.evented = selectable;
+            });
+            c.discardActiveObject();
+            c.renderAll();
         });
     }
 
@@ -135,25 +153,48 @@
         document.getElementById(`wrapper-${idx}`).classList.add('active');
     }
 
-    // PDF書き出し（ズームを一旦解除して出力）
-    async function exportPDF() {
-        const { jsPDF } = window.jspdf;
-        const pdf = new jsPDF('p', 'mm', 'a4');
-        const pageWidth = pdf.internal.pageSize.getWidth();
-        const pageHeight = pdf.internal.pageSize.getHeight();
-        
-        canvases.forEach(c => { if(c) c.setZoom(1); }); // 出力時は等倍に
-
-        for (let i = 1; i <= totalPages; i++) {
-            if (i > 1) pdf.addPage();
-            pdf.addImage(canvases[i].toDataURL({ format: 'png' }), 'PNG', 0, 0, pageWidth, pageHeight);
-        }
-        pdf.save("comic_name.pdf");
-        
-        canvases.forEach(c => { if(c) c.setZoom(currentZoom); }); // ズームを戻す
+    // --- 各種追加（customTypeを付与） ---
+    function addFrame() {
+        const pos = getOffsetCoord();
+        const rect = new fabric.Rect({ 
+            left: pos.left, top: pos.top, width: 300, height: 200, 
+            fill: 'transparent', stroke: 'black', strokeWidth: 3,
+            customType: 'frame' 
+        });
+        canvases[activePageIdx].add(rect).setActiveObject(rect);
+        setEditMode(currentEditMode); // 追加直後に現在のロックを再適用
     }
 
-    // --- 履歴・基本機能 ---
+    function addCharacter() {
+        const pos = getOffsetCoord();
+        const head = new fabric.Circle({ radius: 25, fill: '#fff', stroke: 'black', strokeWidth: 2, left: 10 });
+        const body = new fabric.Triangle({ width: 60, height: 70, fill: '#fff', stroke: 'black', strokeWidth: 2, left: 5, top: 45 });
+        const char = new fabric.Group([body, head], { 
+            left: pos.left, top: pos.top,
+            customType: 'char' 
+        });
+        canvases[activePageIdx].add(char).setActiveObject(char);
+        setEditMode(currentEditMode);
+    }
+
+    function importSerifu() {
+        const lines = document.getElementById('csvInput').value.split('\n').filter(l => l.trim() !== "");
+        const box = document.getElementById('partsBox'); box.innerHTML = "";
+        lines.forEach(text => {
+            const div = document.createElement('div'); div.className = 'serifu-item'; div.innerText = text;
+            div.onclick = () => {
+                fabric.Image.fromURL(createSerifuData(text), img => {
+                    const pos = getOffsetCoord();
+                    img.set({left: pos.left, top: pos.top, customType: 'serifu'});
+                    canvases[activePageIdx].add(img).setActiveObject(img);
+                    setEditMode(currentEditMode);
+                });
+            };
+            box.appendChild(div);
+        });
+    }
+
+    // --- 履歴・コピペ・その他 (前回ベース) ---
     function saveHistory(idx) {
         if (isHistoryLocked) return;
         const state = JSON.stringify(canvases[idx]);
@@ -164,16 +205,21 @@
 
     function undo() {
         const h = history[activePageIdx]; if (h.undos.length <= 1) return;
-        isHistoryLocked = true;
-        h.redos.push(h.undos.pop());
-        canvases[activePageIdx].loadFromJSON(h.undos[h.undos.length-1], () => { canvases[activePageIdx].renderAll(); isHistoryLocked = false; });
+        isHistoryLocked = true; h.redos.push(h.undos.pop());
+        canvases[activePageIdx].loadFromJSON(h.undos[h.undos.length-1], () => { 
+            canvases[activePageIdx].renderAll(); isHistoryLocked = false; 
+            setEditMode(currentEditMode); // 復元後もロックを再適用
+        });
     }
 
     function redo() {
         const h = history[activePageIdx]; if (h.redos.length === 0) return;
         isHistoryLocked = true;
         const state = h.redos.pop(); h.undos.push(state);
-        canvases[activePageIdx].loadFromJSON(state, () => { canvases[activePageIdx].renderAll(); isHistoryLocked = false; });
+        canvases[activePageIdx].loadFromJSON(state, () => { 
+            canvases[activePageIdx].renderAll(); isHistoryLocked = false; 
+            setEditMode(currentEditMode);
+        });
     }
 
     function getOffsetCoord() {
@@ -186,17 +232,22 @@
         if (e.ctrlKey || e.metaKey) {
             if (e.key === 'z') { e.preventDefault(); undo(); }
             if (e.key === 'y') { e.preventDefault(); redo(); }
-            if (e.key === '0') { e.preventDefault(); syncZoom(1); } // ズームリセット
             if (e.key === 'c') {
                 const t = canvases[activePageIdx].getActiveObject();
-                if(t) t.clone(cloned => clipboard = cloned);
+                if(t) t.clone(cloned => { 
+                    // クローン時もカスタムタイプを保持
+                    cloned.customType = t.customType; 
+                    clipboard = cloned; 
+                });
             }
             if (e.key === 'v') {
                 if(!clipboard) return;
                 const pos = getOffsetCoord();
                 clipboard.clone(cl => {
+                    cl.customType = clipboard.customType; // 貼り付け時も保持
                     canvases[activePageIdx].discardActiveObject();
                     canvases[activePageIdx].add(cl.set({left:pos.left, top:pos.top, evented:true})).setActiveObject(cl);
+                    setEditMode(currentEditMode);
                 });
             }
         }
@@ -226,50 +277,33 @@
         return tempCanvas.toDataURL();
     }
 
-    function importSerifu() {
-        const lines = document.getElementById('csvInput').value.split('\n').filter(l => l.trim() !== "");
-        const box = document.getElementById('partsBox'); box.innerHTML = "";
-        lines.forEach(text => {
-            const div = document.createElement('div'); div.className = 'serifu-item'; div.innerText = text;
-            div.onclick = () => {
-                fabric.Image.fromURL(createSerifuData(text), img => {
-                    const pos = getOffsetCoord();
-                    canvases[activePageIdx].add(img.set({left: pos.left, top: pos.top})).setActiveObject(img);
-                });
-            };
-            box.appendChild(div);
-        });
-    }
-
-    function addFrame() {
-        const pos = getOffsetCoord();
-        const rect = new fabric.Rect({ left: pos.left, top: pos.top, width: 300, height: 200, fill: 'transparent', stroke: 'black', strokeWidth: 3 });
-        canvases[activePageIdx].add(rect).setActiveObject(rect);
-    }
-
-    function addCharacter() {
-        const pos = getOffsetCoord();
-        const head = new fabric.Circle({ radius: 25, fill: '#fff', stroke: 'black', strokeWidth: 2, left: 10 });
-        const body = new fabric.Triangle({ width: 60, height: 70, fill: '#fff', stroke: 'black', strokeWidth: 2, left: 5, top: 45 });
-        const char = new fabric.Group([body, head], { left: pos.left, top: pos.top });
-        canvases[activePageIdx].add(char).setActiveObject(char);
-    }
-
     function saveAll() {
-        localStorage.setItem('comic_v_final_zoom', JSON.stringify(canvases.map(c => c ? c.toJSON() : null)));
+        localStorage.setItem('comic_final_v_layer', JSON.stringify(canvases.map(c => c ? c.toJSON(['customType']) : null)));
         alert("保存完了");
     }
 
     function loadAll() {
-        const data = localStorage.getItem('comic_v_final_zoom');
+        const data = localStorage.getItem('comic_final_v_layer');
         if (!data) return;
-        JSON.parse(data).forEach((json, idx) => { if (json && canvases[idx]) canvases[idx].loadFromJSON(json, () => canvases[idx].renderAll()); });
+        JSON.parse(data).forEach((json, idx) => { 
+            if (json && canvases[idx]) canvases[idx].loadFromJSON(json, () => {
+                canvases[idx].renderAll();
+                setEditMode(currentEditMode);
+            }); 
+        });
     }
 
-    window.onload = () => { 
-        setActivePage(1);
-        for(let i=1; i<=totalPages; i++) saveHistory(i); 
-    };
+    async function exportPDF() {
+        const { jsPDF } = window.jspdf;
+        const pdf = new jsPDF('p', 'mm', 'a4');
+        for (let i = 1; i <= totalPages; i++) {
+            if (i > 1) pdf.addPage();
+            pdf.addImage(canvases[i].toDataURL({ format: 'png' }), 'PNG', 0, 0, 210, 297);
+        }
+        pdf.save("comic_name.pdf");
+    }
+
+    window.onload = () => { setActivePage(1); for(let i=1; i<=totalPages; i++) saveHistory(i); };
 </script>
 </body>
 </html>
