@@ -1,26 +1,298 @@
-// --- 修正したインポート処理 ---
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <title>漫画ネーム制作ツール 極・空行区切り版</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/fabric.js/5.3.1/fabric.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+    <style>
+        body { font-family: sans-serif; margin: 0; background: #222; color: #eee; display: flex; height: 100vh; overflow: hidden; }
+        .sidebar { width: 320px; background: #1a1a1a; padding: 20px; display: flex; flex-direction: column; gap: 12px; border-right: 1px solid #444; overflow-y: auto; z-index: 10; }
+        textarea { width: 100%; height: 100px; background: #333; color: white; border: 1px solid #555; padding: 10px; box-sizing: border-box; border-radius: 4px; font-size: 14px; }
+        button { cursor: pointer; padding: 10px; background: #4a90e2; color: white; border: none; border-radius: 4px; font-weight: bold; transition: 0.2s; }
+        button:hover { background: #357abd; }
+        .layer-ctrl { background: #333; padding: 12px; border-radius: 8px; border: 1px solid #444; }
+        .layer-title { font-size: 11px; margin-bottom: 8px; color: #aaa; display: block; }
+        .mode-buttons { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 5px; }
+        .mode-btn { background: #444; color: #888; font-size: 10px; padding: 6px 2px; border: 1px solid #555; }
+        .mode-btn.active { background: #4a90e2; color: white; border-color: #7abaff; }
+        .main-view { flex: 1; display: flex; flex-direction: column; align-items: center; overflow: auto; padding: 60px 0; scroll-snap-type: y mandatory; }
+        .spread-container { display: flex; flex-direction: row-reverse; gap: 20px; padding: 60px; scroll-snap-align: center; }
+        .canvas-box { background: white; box-shadow: 0 10px 40px rgba(0,0,0,0.6); position: relative; border: 2px solid transparent; }
+        .canvas-box.active { border: 2px solid #4a90e2; }
+        .page-label { position: absolute; top: -30px; width: 100%; text-align: center; color: #aaa; font-weight: bold; pointer-events: none; }
+        .canvas-box.active .page-label { color: #4a90e2; font-size: 1.2em; }
+        .parts-box { background: #2a2a2a; padding: 10px; border-radius: 4px; max-height: 200px; overflow-y: auto; border: 1px inset #111; }
+        .serifu-item { background: #f0f0f0; color: #000; padding: 8px; margin-bottom: 5px; cursor: pointer; font-size: 13px; border-radius: 3px; font-weight: bold; white-space: pre-wrap; }
+        .btn-group { display: grid; grid-template-columns: 1fr 1fr; gap: 5px; }
+        #fileInput { display: none; }
+    </style>
+</head>
+<body>
+
+<div class="sidebar">
+    <div class="layer-ctrl">
+        <span class="layer-title">編集モード（セリフは常に最前面）</span>
+        <div class="mode-buttons">
+            <button class="mode-btn active" id="btn-all" onclick="setEditMode('all')">すべて</button>
+            <button class="mode-btn" id="btn-frame" onclick="setEditMode('frame')">コマ</button>
+            <button class="mode-btn" id="btn-serifu" onclick="setEditMode('serifu')">セリフ</button>
+            <button class="mode-btn" id="btn-char" onclick="setEditMode('char')">キャラ</button>
+        </div>
+    </div>
+    
+    <label>1. セリフ投入 (空行で区切り)</label>
+    <textarea id="csvInput" placeholder="セリフ1&#13;&#10;&#13;&#10;改行入りの&#13;&#10;セリフ2"></textarea>
+    <button onclick="importSerifu()">リスト更新</button>
+    <div class="parts-box" id="partsBox"></div>
+
+    <label>2. パーツ追加</label>
+    <div class="btn-group">
+        <button onclick="addFrame()" style="background: #555;">コマ枠</button>
+        <button onclick="addCharacter()" style="background: #e67e22;">キャラ</button>
+    </div>
+    
+    <hr style="width:100%; border:0; border-top:1px solid #444;">
+    
+    <label>3. 管理・出力</label>
+    <button onclick="downloadProject()" style="background: #27ae60; width:100%; margin-bottom:5px;">プロジェクト保存</button>
+    <button onclick="document.getElementById('fileInput').click()" style="background: #8e44ad; width:100%; margin-bottom:5px;">プロジェクト読込</button>
+    <input type="file" id="fileInput" accept=".json" onchange="loadProject(event)">
+    <button onclick="exportPDF()" style="background: #c0392b; width:100%;">PDF書き出し</button>
+
+    <div style="font-size: 11px; color: #666; line-height: 1.4;">
+        Ctrl+Z/Y: Undo/Redo<br>
+        Ctrl+C/V: コピペ<br>
+        Ctrl+ホイール: ズーム
+    </div>
+</div>
+
+<div class="main-view" id="scrollArea"></div>
+
+<script>
+    const totalPages = 40;
+    const canvases = [];
+    let activePageIdx = 1;
+    let clipboard = null;
+    let offsetCounter = 0;
+    let currentEditMode = 'all';
+    const history = {};
+    let isHistoryLocked = false;
+
+    // キャンバス初期化
+    const scrollArea = document.getElementById('scrollArea');
+    for (let i = 1; i <= totalPages; i += 2) {
+        const container = document.createElement('div');
+        container.className = 'spread-container';
+        container.appendChild(createCanvasElement(i));
+        if(i+1 <= totalPages) container.appendChild(createCanvasElement(i + 1));
+        scrollArea.appendChild(container);
+    }
+
+    function createCanvasElement(num) {
+        const wrapper = document.createElement('div');
+        wrapper.className = 'canvas-box'; wrapper.id = `wrapper-${num}`;
+        wrapper.innerHTML = `<div class="page-label">P.${num}</div><canvas id="pc-${num}"></canvas>`;
+        return wrapper;
+    }
+
+    for (let i = 1; i <= totalPages; i++) {
+        const c = new fabric.Canvas(`pc-${i}`, { width: 420, height: 600, backgroundColor: '#fff' });
+        history[i] = { undos: [], redos: [] };
+        c.on('object:added', (opt) => { if(!opt.target.customType) opt.target.customType = 'unknown'; sortLayers(c); saveHistory(i); });
+        c.on('object:modified', () => { sortLayers(c); saveHistory(i); });
+        c.on('object:removed', () => saveHistory(i));
+        c.on('mouse:down', () => setActivePage(i));
+        c.on('mouse:wheel', function(opt) {
+            if (opt.e.ctrlKey) {
+                const delta = opt.e.deltaY;
+                let zoom = c.getZoom() * (0.999 ** delta);
+                zoom = Math.min(Math.max(zoom, 0.2), 5);
+                canvases.forEach(can => { if(can){ can.setZoom(zoom); can.renderAll(); }});
+                opt.e.preventDefault(); opt.e.stopPropagation();
+            }
+        });
+        canvases[i] = c;
+    }
+
+    // --- セリフインポート（空行区切り） ---
     function importSerifu() {
         const input = document.getElementById('csvInput').value;
-        
-        // 正規表現 /\n\s*\n/ で「空行（改行の間にスペースがあってもOK）」を区切り文字にします
-        const blocks = input.split(/\n\s*\n/).filter(block => block.trim() !== "");
-        
+        const blocks = input.split(/\n\s*\n/).filter(b => b.trim() !== "");
         const box = document.getElementById('partsBox');
-        box.innerHTML = ""; // リストを一旦リセット
+        box.innerHTML = "";
         
         blocks.forEach(text => {
+            const cleanText = text.trim();
             const div = document.createElement('div');
             div.className = 'serifu-item';
-            div.innerText = text.trim(); // リスト表示用
-            
+            div.innerText = cleanText;
             div.onclick = () => {
-                fabric.Image.fromURL(createSerifuData(text.trim()), img => {
+                fabric.Image.fromURL(createSerifuData(cleanText), img => {
                     const pos = getOffsetCoord();
                     img.set({left: pos.left, top: pos.top, customType: 'serifu'});
                     canvases[activePageIdx].add(img).setActiveObject(img);
-                    setEditMode(currentEditMode); // モード維持
                 });
             };
             box.appendChild(div);
         });
     }
+
+    // --- 縦書き生成（改行維持） ---
+    function createSerifuData(text) {
+        const tempCanvas = document.createElement('canvas');
+        const tCtx = tempCanvas.getContext('2d');
+        const fSize = 28;
+        const lines = text.split('\n');
+        
+        tempCanvas.width = lines.length * (fSize * 1.3) + 40;
+        tempCanvas.height = Math.max(...lines.map(l => l.length)) * fSize + 40;
+        
+        tCtx.font = `bold ${fSize}px "MS Gothic", sans-serif`;
+        tCtx.textBaseline = 'top';
+        tCtx.textAlign = 'center';
+        tCtx.fillStyle = "black";
+
+        lines.forEach((line, i) => {
+            const x = tempCanvas.width - (i * fSize * 1.3) - (fSize + 10);
+            for (let j = 0; j < line.length; j++) {
+                let char = line[j], y = j * fSize + 10;
+                if ("ー〜－―".includes(char)) {
+                    tCtx.save(); tCtx.translate(x, y + fSize/2); tCtx.rotate(Math.PI / 2); tCtx.fillText(char, 0, -fSize/2); tCtx.restore();
+                } else if ("、。".includes(char)) {
+                    tCtx.fillText(char, x + fSize*0.4, y - fSize*0.4);
+                } else {
+                    tCtx.fillText(char, x, y);
+                }
+            }
+        });
+        return tempCanvas.toDataURL();
+    }
+
+    // --- 基本機能・保存・読込 ---
+    function sortLayers(canvas) {
+        canvas.getObjects().forEach(obj => { if (obj.customType === 'serifu') canvas.bringToFront(obj); });
+    }
+
+    function setEditMode(mode) {
+        currentEditMode = mode;
+        document.querySelectorAll('.mode-btn').forEach(b => b.classList.remove('active'));
+        document.getElementById(`btn-${mode}`).classList.add('active');
+        canvases.forEach(c => {
+            if(!c) return;
+            c.getObjects().forEach(obj => {
+                let isMatch = (mode === 'all' || (mode === obj.customType));
+                obj.set({ selectable: isMatch, evented: isMatch, opacity: (mode === 'all' || isMatch) ? 1.0 : 0.3 });
+            });
+            c.discardActiveObject(); c.requestRenderAll();
+        });
+    }
+
+    function setActivePage(idx) {
+        if (activePageIdx !== idx) offsetCounter = 0;
+        activePageIdx = idx;
+        document.querySelectorAll('.canvas-box').forEach(el => el.classList.remove('active'));
+        document.getElementById(`wrapper-${idx}`).classList.add('active');
+    }
+
+    function addFrame() {
+        const pos = getOffsetCoord();
+        const rect = new fabric.Rect({ left: pos.left, top: pos.top, width: 300, height: 200, fill: 'transparent', stroke: 'black', strokeWidth: 3, customType: 'frame' });
+        canvases[activePageIdx].add(rect).setActiveObject(rect);
+    }
+
+    function addCharacter() {
+        const pos = getOffsetCoord();
+        const head = new fabric.Circle({ radius: 25, fill: '#fff', stroke: 'black', strokeWidth: 2, left: 10 });
+        const body = new fabric.Triangle({ width: 60, height: 70, fill: '#fff', stroke: 'black', strokeWidth: 2, left: 5, top: 45 });
+        const char = new fabric.Group([body, head], { left: pos.left, top: pos.top, customType: 'char' });
+        canvases[activePageIdx].add(char).setActiveObject(char);
+    }
+
+    function downloadProject() {
+        const projectData = { pages: canvases.map(c => c ? c.toJSON(['customType']) : null) };
+        const blob = new Blob([JSON.stringify(projectData)], { type: "application/json" });
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(blob);
+        a.download = `name_project_${Date.now()}.json`;
+        a.click();
+    }
+
+    function loadProject(event) {
+        const reader = new FileReader();
+        reader.onload = (e) => {
+            const data = JSON.parse(e.target.result);
+            isHistoryLocked = true;
+            data.pages.forEach((json, idx) => {
+                if (json && canvases[idx]) canvases[idx].loadFromJSON(json, () => {
+                    sortLayers(canvases[idx]); canvases[idx].renderAll();
+                    if(idx === totalPages) { isHistoryLocked = false; setEditMode(currentEditMode); }
+                });
+            });
+        };
+        reader.readAsText(event.target.files[0]);
+    }
+
+    function saveHistory(idx) {
+        if (isHistoryLocked) return;
+        const state = JSON.stringify(canvases[idx].toJSON(['customType']));
+        if (history[idx].undos.slice(-1)[0] === state) return;
+        history[idx].undos.push(state);
+        history[idx].redos = [];
+    }
+
+    function undo() {
+        const h = history[activePageIdx]; if (h.undos.length <= 1) return;
+        isHistoryLocked = true; h.redos.push(h.undos.pop());
+        canvases[activePageIdx].loadFromJSON(h.undos[h.undos.length-1], () => { canvases[activePageIdx].renderAll(); isHistoryLocked = false; setEditMode(currentEditMode); });
+    }
+
+    function redo() {
+        const h = history[activePageIdx]; if (h.redos.length === 0) return;
+        isHistoryLocked = true;
+        const state = h.redos.pop(); h.undos.push(state);
+        canvases[activePageIdx].loadFromJSON(state, () => { canvases[activePageIdx].renderAll(); isHistoryLocked = false; setEditMode(currentEditMode); });
+    }
+
+    function getOffsetCoord() {
+        const pos = { left: 40 + (offsetCounter * 25), top: 40 + (offsetCounter * 25) };
+        offsetCounter = (offsetCounter + 1) % 6; return pos;
+    }
+
+    window.addEventListener('keydown', (e) => {
+        if (document.activeElement.tagName === 'TEXTAREA') return;
+        if (e.ctrlKey || e.metaKey) {
+            if (e.key === 'z') { e.preventDefault(); undo(); }
+            if (e.key === 'y') { e.preventDefault(); redo(); }
+            if (e.key === 'c') { const t = canvases[activePageIdx].getActiveObject(); if(t) t.clone(cl => { cl.customType = t.customType; clipboard = cl; }, ['customType']); }
+            if (e.key === 'v') {
+                if(!clipboard) return;
+                const pos = getOffsetCoord();
+                clipboard.clone(cl => {
+                    canvases[activePageIdx].discardActiveObject();
+                    cl.set({left:pos.left, top:pos.top, evented:true, customType: clipboard.customType});
+                    canvases[activePageIdx].add(cl).setActiveObject(cl);
+                }, ['customType']);
+            }
+        }
+        if (e.key === 'Delete' || e.key === 'Backspace') {
+            const acts = canvases[activePageIdx].getActiveObjects();
+            canvases[activePageIdx].remove(...acts).discardActiveObject().renderAll();
+        }
+    });
+
+    async function exportPDF() {
+        const { jsPDF } = window.jspdf;
+        const pdf = new jsPDF('p', 'mm', 'a4');
+        for (let i = 1; i <= totalPages; i++) {
+            if (i > 1) pdf.addPage();
+            pdf.addImage(canvases[i].toDataURL({ format: 'png' }), 'PNG', 0, 0, 210, 297);
+        }
+        pdf.save("comic_name.pdf");
+    }
+
+    window.onload = () => { setActivePage(1); for(let i=1; i<=totalPages; i++) saveHistory(i); importSerifu(); };
+</script>
+</body>
+</html>
